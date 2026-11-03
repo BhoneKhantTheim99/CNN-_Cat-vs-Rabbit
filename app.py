@@ -4,7 +4,14 @@ from pathlib import Path
 import numpy as np
 import streamlit as st
 import tensorflow as tf
-from PIL import Image
+from PIL import Image, ImageOps, UnidentifiedImageError
+
+# optional: lets the app open iPhone .HEIC / .HEIF photos
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass
 
 HERE = Path(__file__).parent
 IMG_SIZE = (224, 224)
@@ -19,17 +26,37 @@ def load_model():
     return model, class_names
 
 
+def load_image(file):
+    """Open any image format and return a clean RGB image."""
+    img = Image.open(file)
+    img = ImageOps.exif_transpose(img)                 # fix sideways phone photos
+    if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+        img = img.convert('RGBA')                      # transparent PNG/GIF -> white background
+        background = Image.new('RGBA', img.size, (255, 255, 255, 255))
+        background.alpha_composite(img)
+        img = background
+    return img.convert('RGB')
+
+
 model, class_names = load_model()
 
 st.title('🐱 Cat vs Rabbit 🐰')
 st.write('Upload a photo and the CNN will tell you whether it shows a cat or a rabbit.')
 
-uploaded = st.file_uploader('Choose an image', type=['jpg', 'jpeg', 'png', 'webp'])
+# type=None -> accepts any file; non-images are caught below
+uploaded = st.file_uploader('Choose an image (JPG, JPEG, PNG, WEBP, BMP, GIF, TIFF, HEIC ...)', type=None)
 
 if uploaded is not None:
-    img = Image.open(uploaded).convert('RGB')
+    try:
+        img = load_image(uploaded)
+    except (UnidentifiedImageError, OSError):
+        st.error('Sorry, I could not read that file as an image. Please upload a picture file.')
+        st.stop()
+
     st.image(img, caption='Your image', use_container_width=True)
 
+    # same preprocessing as training: resize to 224x224, raw 0-255 floats
+    # (the model rescales to 0-1 internally)
     x = np.expand_dims(np.array(img.resize(IMG_SIZE, Image.BILINEAR), dtype='float32'), axis=0)
 
     p_class1 = float(model.predict(x, verbose=0)[0][0])
